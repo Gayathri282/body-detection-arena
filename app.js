@@ -102,14 +102,24 @@ function analyze(landmarks) {
   const bodyHeight = Math.max(0.20, (visible(landmarks[27]) || visible(landmarks[31])) ? dist(shoulder, foot) : torsoH * 2.2);
   const bodyScalePct = Math.round(bodyHeight * 100);
 
-  const leftKnee = (landmarks[23] && landmarks[25] && landmarks[27]) ? kneeAngle(landmarks[23], landmarks[25], landmarks[27]) : 180;
-  const rightKnee = (landmarks[24] && landmarks[26] && landmarks[28]) ? kneeAngle(landmarks[24], landmarks[26], landmarks[28]) : 180;
+  const leftAnklePt = (landmarks[27] && visible(landmarks[27])) ? landmarks[27] : (landmarks[25] ? { x: landmarks[25].x, y: landmarks[25].y + 0.25 } : null);
+  const rightAnklePt = (landmarks[28] && visible(landmarks[28])) ? landmarks[28] : (landmarks[26] ? { x: landmarks[26].x, y: landmarks[26].y + 0.25 } : null);
+
+  const leftKnee = (landmarks[23] && landmarks[25] && leftAnklePt) ? kneeAngle(landmarks[23], landmarks[25], leftAnklePt) : 180;
+  const rightKnee = (landmarks[24] && landmarks[26] && rightAnklePt) ? kneeAngle(landmarks[24], landmarks[26], rightAnklePt) : 180;
   const kneeAvg = (leftKnee + rightKnee) / 2;
 
-  const leftAnkleY = landmarks[27] ? landmarks[27].y : ankle.y;
-  const rightAnkleY = landmarks[28] ? landmarks[28].y : ankle.y;
+  const leftAnkleY = leftAnklePt ? leftAnklePt.y : knee.y + 0.2;
+  const rightAnkleY = rightAnklePt ? rightAnklePt.y : knee.y + 0.2;
 
   const hipY = hip.y, shoulderY = shoulder.y, footY = foot.y;
+
+  // Hand / Wrist Positions for Synchronous Arm Swing Tracking
+  const leftWrist = landmarks[15], rightWrist = landmarks[16];
+  const leftElbow = landmarks[13], rightElbow = landmarks[14];
+  const leftHandY = (leftWrist && visible(leftWrist)) ? leftWrist.y : (leftElbow ? leftElbow.y : shoulderY);
+  const rightHandY = (rightWrist && visible(rightWrist)) ? rightWrist.y : (rightElbow ? rightElbow.y : shoulderY);
+  const handDiff = leftHandY - rightHandY;
 
   // POSITION DETECTION (STRICTLY INDEPENDENT - Section 13)
   const rawX = (hip.x + shoulder.x) / 2;
@@ -132,6 +142,9 @@ function analyze(landmarks) {
     leftAnkleY,
     rightAnkleY,
     ankleYDiff: leftAnkleY - rightAnkleY,
+    leftHandY,
+    rightHandY,
+    handDiff,
     bodyH: bodyHeight
   };
 
@@ -146,15 +159,16 @@ function analyze(landmarks) {
   const firstFrame = frameHistory[0];
   const dt = Math.max(.05, (now - firstFrame.t) / 1000);
 
-  // Normalized displacements relative to body height (Section 5)
+  // Normalized displacements relative to body height
   const normHipDy = (firstFrame.hipY - hipY) / bodyHeight; // Positive when body moves UP
   const normShoulderDy = (firstFrame.shoulderY - shoulderY) / bodyHeight;
   const normFootDy = (firstFrame.footY - footY) / bodyHeight;
   const normHipSpeed = Math.abs(normHipDy) / dt;
 
-  // Ground / Airborne check (Strict Normalized Threshold to prevent Idle Jumping)
+  // JUMPING: BOTH FEET MUST BE OFF THE GROUND (Strict airborne verification)
   const normFeetElev = (baseFootY - footY) / bodyHeight;
-  const feetAirborne = normFeetElev > 0.085 && normHipDy > 0.04;
+  const bothFeetAirborne = normFeetElev > 0.065 && normFootDy > 0.03 && normHipDy > 0.035;
+  const feetAirborne = bothFeetAirborne;
 
   // --- SQUATTING FEATURE (RELATIVE GEOMETRY - Section 7) ---
   const bothKneesBent = leftKnee < 145 && rightKnee < 145;
@@ -169,46 +183,49 @@ function analyze(landmarks) {
     squatRaw = 0.65; // Protect continuous squatting event during ASCENDING phase
   }
 
-  // --- JUMPING FEATURE (COORDINATED VERTICAL EVENT - Section 8) ---
+  // --- JUMPING FEATURE (BOTH FEET AIRBORNE & WHOLE BODY UPWARD) ---
   const normUpwardCoherence = Math.min(normHipDy, normShoulderDy);
-  const isJumpTrajectory = normUpwardCoherence > 0.04 && feetAirborne;
+  const isJumpTrajectory = normUpwardCoherence > 0.035 && bothFeetAirborne;
 
   let jumpRaw = 0.0;
-  if (isSquatAscending || normFeetElev < 0.04) {
-    jumpRaw = 0.0; // Idle standing & squat ascent MUST NEVER trigger jumping
+  if (isSquatAscending || !bothFeetAirborne) {
+    jumpRaw = 0.0; // Both feet MUST be off the ground for jumping!
   } else if (isJumpTrajectory) {
     jumpRaw = Math.min(1.0, 0.5 + normFeetElev * 8 + normUpwardCoherence * 6);
-  } else if (feetAirborne && kneeAvg > 115 && normHipDy > 0.035) {
-    jumpRaw = 0.6;
+  } else if (bothFeetAirborne && kneeAvg > 115) {
+    jumpRaw = 0.7;
   }
 
-  // --- RUNNING FEATURE (ALTERNATING GAIT ENGINE - Section 9) ---
-  // Calculate leg asymmetry & gait oscillation across the rolling 1-second history window
+  // --- RUNNING FEATURE (CONTINUOUS SYNCHRONOUS ALTERNATING HAND & LEG MOTION) ---
   const allKneeDiffs = frameHistory.map(f => f.kneeDiff);
   const maxKneeDiff = Math.max(...allKneeDiffs);
   const minKneeDiff = Math.min(...allKneeDiffs);
-  const gaitRange = maxKneeDiff - minKneeDiff; // Full peak-to-trough range of leg asymmetry
+  const legGaitRange = maxKneeDiff - minKneeDiff; // Leg asymmetry range
+
+  const allHandDiffs = frameHistory.map(f => f.handDiff);
+  const maxHandDiff = Math.max(...allHandDiffs);
+  const minHandDiff = Math.min(...allHandDiffs);
+  const handSwingRange = (maxHandDiff - minHandDiff) / bodyHeight; // Arm swing range
 
   const currentKneeAsymmetry = Math.abs(leftKnee - rightKnee);
   const maxKneeAsymmetry = Math.max(...frameHistory.map(f => Math.abs(f.kneeDiff)));
-  
-  // Rate of knee angle change over recent frames (leg movement activity)
   const kneeMotionSpeed = Math.abs(leftKnee - firstFrame.leftKnee) + Math.abs(rightKnee - firstFrame.rightKnee);
 
   let runScore = 0.0;
 
-  // Key Running Signals:
-  // 1. Gait alternation (left leg flexed, then right leg flexed across rolling window): gaitRange > 18°
-  if (gaitRange > 18 && !bothKneesBent) {
-    runScore += 0.55;
+  // 1. Leg Alternation: left leg flexed then right leg flexed (legGaitRange > 16°)
+  if (legGaitRange > 16 && !bothKneesBent) {
+    runScore += 0.45;
   }
-  // 2. High leg asymmetry (one leg bent while other is extended): maxKneeAsymmetry > 16°
-  if (maxKneeAsymmetry > 16 && !bothKneesBent) {
+
+  // 2. Synchronous Arm Swing: continuous alternating hand movements (handSwingRange > 0.05)
+  if (handSwingRange > 0.05 && !bothKneesBent) {
     runScore += 0.35;
   }
-  // 3. Active leg motion speed (legs actively moving): kneeMotionSpeed > 14°
-  if (kneeMotionSpeed > 14 && currentKneeAsymmetry > 12 && !bothKneesBent) {
-    runScore += 0.25;
+
+  // 3. Active Leg Motion (legs actively moving with asymmetry)
+  if (maxKneeAsymmetry > 15 && kneeMotionSpeed > 12 && !bothKneesBent) {
+    runScore += 0.30;
   }
 
   // CRUCIAL DISAMBIGUATION:
@@ -260,8 +277,8 @@ function analyze(landmarks) {
     leftKnee: Math.round(leftKnee),
     rightKnee: Math.round(rightKnee),
     hipSpeed: normHipSpeed.toFixed(3),
-    kneeFlips,
-    normAnkleAsymmetry: normAnkleAsymmetry.toFixed(2),
+    kneeFlips: Math.round(legGaitRange),
+    normAnkleAsymmetry: handSwingRange.toFixed(2),
     grounded: feetAirborne ? "NO (AIRBORNE)" : "YES",
     visScore: Math.round(visScore * 100)
   });
