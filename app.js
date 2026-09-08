@@ -2,26 +2,37 @@ const appEl = document.getElementById("app");
 const video = document.getElementById("video");
 const overlay = document.getElementById("overlay");
 const ctx = overlay.getContext("2d");
+const setupOverlay = document.getElementById("setupOverlay");
+const setupBadge = document.getElementById("setupBadge");
 const setupMessage = document.getElementById("setupMessage");
-const setup = document.getElementById("setup");
-const game = document.getElementById("game");
 const actionEl = document.getElementById("action");
 const positionEl = document.getElementById("position");
 const confidenceEl = document.getElementById("confidence");
 const warning = document.getElementById("boundaryWarning");
 const statusEl = document.getElementById("status");
-const recalibrate = document.getElementById("recalibrate");
-const cameraContainer = document.getElementById("cameraContainer");
-const setupVideoHolder = document.getElementById("setupVideoHolder");
-const gameVideoHolder = document.getElementById("gameVideoHolder");
-const badgeEl = document.getElementById("setupOverlayBadge");
+const debugPanel = document.getElementById("debugPanel");
+
+// Debug Panel Elements
+const dbgState = document.getElementById("dbgState");
+const dbgConf = document.getElementById("dbgConf");
+const dbgScale = document.getElementById("dbgScale");
+const dbgKnees = document.getElementById("dbgKnees");
+const dbgHipVel = document.getElementById("dbgHipVel");
+const dbgGait = document.getElementById("dbgGait");
+const dbgQuality = document.getElementById("dbgQuality");
 
 let stream = null, pose = null, camera = null, calibration = null;
 let current = null;
 
-// Automatic hands-free start and pause/resume counters
+// Hands-free Auto-Start & Vision Loss Grace Period Parameters
 let stableFullBodyFrames = 0;
-const REQUIRED_STABLE_FRAMES = 36; // ~1.2s to 1.5s of stable full-body detection
+const REQUIRED_STABLE_FRAMES = 36; // ~1.2s - 1.5s stability for auto-start
+let gameActive = false;
+
+// LOST-VISION GRACE PERIOD (Section 4): Protect jumps & fast motion from instant pause
+let gracePeriodCounter = 0;
+const MAX_GRACE_FRAMES = 25; // ~800ms grace period before declaring lost vision
+let lastValidAnalysis = null;
 let inGameResumeFrames = 0;
 
 // ============================================================================
@@ -52,7 +63,6 @@ let runConf = 0.0;
 // Rolling Frame History (24 frames max ~ 1 sec)
 const HISTORY_WINDOW = 24;
 const frameHistory = [];
-let lowQualityFrames = 0;
 
 function dist(a, b) { return Math.hypot(a.x - b.x, a.y - b.y); }
 function avg(a, b) { return { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2, z: (a.z + b.z) / 2, visibility: Math.min(a.visibility || 0, b.visibility || 0) }; }
@@ -65,7 +75,7 @@ function kneeAngle(a, b, c) {
   return Math.acos(Math.max(-1, Math.min(1, dot / Math.max(1e-6, den)))) * 180 / Math.PI;
 }
 
-// Main Motion & Action Classifier
+// Main Motion & Action Classifier using Normalized Body Geometry
 function analyze(landmarks) {
   current = { poseLandmarks: landmarks };
 
@@ -77,23 +87,19 @@ function analyze(landmarks) {
 
   const upperBodyOk = visible(landmarks[11]) && visible(landmarks[12]) && visible(landmarks[23]) && visible(landmarks[24]);
   if (!upperBodyOk || visScore < 0.35) {
-    lowQualityFrames++;
-    if (lowQualityFrames < 10 && frameHistory.length > 0) {
-      const prev = frameHistory[frameHistory.length - 1];
-      return { ok: true, pos: prev.pos, act: getDisplayedAction(), screenX: prev.screenX, footY: prev.footY, bodyH: prev.bodyH };
-    }
-    return { ok: false };
+    return { ok: false, visScore };
   }
-  lowQualityFrames = 0;
 
-  // Key Coordinates
+  // Key Joint Centers
   const shoulder = avg(landmarks[11], landmarks[12]);
   const hip = avg(landmarks[23], landmarks[24]);
   const knee = (landmarks[25] && landmarks[26]) ? avg(landmarks[25], landmarks[26]) : hip;
   const ankle = (landmarks[27] && landmarks[28]) ? avg(landmarks[27], landmarks[28]) : knee;
   const foot = (landmarks[31] && landmarks[32] && visible(landmarks[31]) && visible(landmarks[32])) ? avg(landmarks[31], landmarks[32]) : ankle;
 
-  const bodyH = Math.max(.2, dist(shoulder, foot));
+  // NORMALIZED BODY GEOMETRY (Section 5): Normalize using full-body scale
+  const bodyHeight = Math.max(0.20, dist(shoulder, foot));
+  const bodyScalePct = Math.round(bodyHeight * 100);
 
   const leftKnee = (landmarks[23] && landmarks[25] && landmarks[27]) ? kneeAngle(landmarks[23], landmarks[25], landmarks[27]) : 180;
   const rightKnee = (landmarks[24] && landmarks[26] && landmarks[28]) ? kneeAngle(landmarks[24], landmarks[26], landmarks[28]) : 180;
@@ -104,10 +110,10 @@ function analyze(landmarks) {
 
   const hipY = hip.y, shoulderY = shoulder.y, footY = foot.y;
 
-  // POSITION DETECTION (STRICTLY INDEPENDENT)
+  // POSITION DETECTION (STRICTLY INDEPENDENT - Section 13)
   const rawX = (hip.x + shoulder.x) / 2;
   const screenX = 1 - rawX; // Mirror adjustment
-  const pos = screenX < .38 ? "LEFT" : screenX > .62 ? "RIGHT" : "CENTER";
+  const pos = screenX < .35 ? "LEFT" : screenX > .65 ? "RIGHT" : "CENTER";
 
   const now = performance.now();
   const frameSample = {
@@ -125,54 +131,57 @@ function analyze(landmarks) {
     leftAnkleY,
     rightAnkleY,
     ankleYDiff: leftAnkleY - rightAnkleY,
-    bodyH
+    bodyH: bodyHeight
   };
 
   frameHistory.push(frameSample);
   if (frameHistory.length > HISTORY_WINDOW) frameHistory.shift();
 
   // --------------------------------------------------------------------------
-  // TEMPORAL FEATURE EXTRACTION
+  // TEMPORAL FEATURE EXTRACTION (NORMALIZED SCALE-INVARIANT RATIOS)
   // --------------------------------------------------------------------------
   const baseFootY = calibration?.baselineFootY ?? frameHistory[0].footY;
+  const baseHipY = calibration?.baselineHipY ?? frameHistory[0].hipY;
   const firstFrame = frameHistory[0];
   const dt = Math.max(.05, (now - firstFrame.t) / 1000);
 
-  const hipDy = firstFrame.hipY - hipY; // Positive when body moves UP
-  const shoulderDy = firstFrame.shoulderY - shoulderY;
-  const footDy = firstFrame.footY - footY;
-  const hipSpeed = Math.abs(hipDy) / dt;
+  // Normalized displacements relative to body height (Section 5)
+  const normHipDy = (firstFrame.hipY - hipY) / bodyHeight; // Positive when body moves UP
+  const normShoulderDy = (firstFrame.shoulderY - shoulderY) / bodyHeight;
+  const normFootDy = (firstFrame.footY - footY) / bodyHeight;
+  const normHipSpeed = Math.abs(normHipDy) / dt;
 
-  // Ground / Airborne check
-  const feetAirborne = (baseFootY - footY) > 0.032 || footDy > 0.028;
+  // Ground / Airborne check (Normalized)
+  const normFeetElev = (baseFootY - footY) / bodyHeight;
+  const feetAirborne = normFeetElev > 0.07 || normFootDy > 0.06;
 
-  // --- SQUATTING FEATURE ---
-  const bothKneesBent = leftKnee < 142 && rightKnee < 142;
+  // --- SQUATTING FEATURE (RELATIVE GEOMETRY - Section 7) ---
+  const bothKneesBent = leftKnee < 140 && rightKnee < 140;
   const deepKneeBend = kneeAvg < 135;
-  const hipLowered = hipY > shoulderY + bodyH * .17;
-  const isSquatAscending = (currentState === FSMState.SQUATTING || currentState === FSMState.SQUAT_CANDIDATE) && hipDy > 0.015 && kneeAvg < 162;
+  const normHipDescent = (hipY - baseHipY) / bodyHeight;
+  const isSquatAscending = (currentState === FSMState.SQUATTING || currentState === FSMState.SQUAT_CANDIDATE) && normHipDy > 0.03 && kneeAvg < 162;
 
   let squatRaw = 0.0;
-  if (bothKneesBent || deepKneeBend || (hipLowered && kneeAvg < 148)) {
+  if (bothKneesBent || deepKneeBend || (normHipDescent > 0.10 && kneeAvg < 148)) {
     squatRaw = Math.min(1.0, 0.4 + (145 - Math.min(leftKnee, rightKnee)) / 50);
   } else if (isSquatAscending) {
-    squatRaw = 0.65; // Preserve continuous squat during ASCENDING phase
+    squatRaw = 0.65; // Protect continuous squatting event during ASCENDING phase
   }
 
-  // --- JUMPING FEATURE ---
-  const upwardCoherence = Math.min(hipDy, shoulderDy);
-  const isJumpTrajectory = upwardCoherence > 0.025 && feetAirborne;
+  // --- JUMPING FEATURE (COORDINATED VERTICAL EVENT - Section 8) ---
+  const normUpwardCoherence = Math.min(normHipDy, normShoulderDy);
+  const isJumpTrajectory = normUpwardCoherence > 0.04 && feetAirborne;
 
   let jumpRaw = 0.0;
   if (isSquatAscending) {
-    jumpRaw = 0.0;
+    jumpRaw = 0.0; // Squat ascent must NEVER trigger jumping
   } else if (isJumpTrajectory) {
-    jumpRaw = Math.min(1.0, 0.5 + (baseFootY - footY) * 10 + upwardCoherence * 5);
-  } else if (feetAirborne && kneeAvg > 115 && hipDy > 0.015) {
+    jumpRaw = Math.min(1.0, 0.5 + normFeetElev * 8 + normUpwardCoherence * 6);
+  } else if (feetAirborne && kneeAvg > 115 && normHipDy > 0.03) {
     jumpRaw = 0.6;
   }
 
-  // --- RUNNING FEATURE ---
+  // --- RUNNING FEATURE (ALTERNATING GAIT ENGINE - Section 9) ---
   let kneeFlips = 0;
   for (let i = 1; i < frameHistory.length; i++) {
     const prevDiff = frameHistory[i - 1].kneeDiff;
@@ -184,28 +193,31 @@ function analyze(landmarks) {
 
   const maxKneeAsymmetry = Math.max(...frameHistory.map(f => Math.abs(f.kneeDiff)));
   const maxAnkleAsymmetry = Math.max(...frameHistory.map(f => Math.abs(f.ankleYDiff)));
+  const normAnkleAsymmetry = maxAnkleAsymmetry / bodyHeight;
 
   let runScore = 0.0;
-  if (kneeFlips >= 2 && maxKneeAsymmetry > 22) runScore += 0.55;
-  if (maxAnkleAsymmetry > 0.045) runScore += 0.30;
-  if (maxKneeAsymmetry > 26 && hipSpeed > 0.03) runScore += 0.25;
+  if (kneeFlips >= 2 && maxKneeAsymmetry > 20) runScore += 0.55;
+  if (normAnkleAsymmetry > 0.08) runScore += 0.30;
+  if (maxKneeAsymmetry > 25 && normHipSpeed > 0.06) runScore += 0.25;
 
-  if (maxKneeAsymmetry < 16 || isJumpTrajectory || isSquatAscending) {
+  // Suppress running if both legs move in sync or during squatting/jumping
+  if (maxKneeAsymmetry < 15 || isJumpTrajectory || isSquatAscending) {
     runScore = 0.0;
   }
 
   let runRaw = Math.min(1.0, runScore);
 
-  // --- IDLE FEATURE ---
+  // --- IDLE FEATURE (NORMAL HUMAN STANDING - Section 6) ---
   const activeSum = squatRaw * 1.2 + jumpRaw * 1.2 + runRaw * 1.2;
   let idleRaw = Math.max(0.0, 1.0 - activeSum);
 
-  if (hipSpeed < 0.035 && !feetAirborne && maxKneeAsymmetry < 18 && kneeAvg > 155 && !bothKneesBent) {
+  // Dead-zone tolerance for breathing, small posture/arm shifts, camera jitter
+  if (normHipSpeed < 0.06 && !feetAirborne && maxKneeAsymmetry < 16 && kneeAvg > 155 && !bothKneesBent) {
     idleRaw = 1.0; squatRaw = 0.0; jumpRaw = 0.0; runRaw = 0.0;
   }
 
   // --------------------------------------------------------------------------
-  // CONFIDENCE TEMPORAL SMOOTHING (EMA)
+  // CONFIDENCE TEMPORAL SMOOTHING (EMA - Section 6 & 11)
   // --------------------------------------------------------------------------
   const alpha = 0.22;
   idleConf  = idleConf  * (1 - alpha) + idleRaw  * alpha;
@@ -214,31 +226,34 @@ function analyze(landmarks) {
   runConf   = runConf   * (1 - alpha) + runRaw   * alpha;
 
   // --------------------------------------------------------------------------
-  // FINITE STATE MACHINE TRANSITIONS & HYSTERESIS
+  // FINITE STATE MACHINE TRANSITIONS & HYSTERESIS (Section 11 & 12)
   // --------------------------------------------------------------------------
   updateStateMachine(feetAirborne, kneeAvg);
 
   const act = getDisplayedAction();
 
-  window.debugMotionState = {
+  // Developer Debug Information (Section 15)
+  updateDebugPanel({
     state: currentState,
     confidences: {
-      idle: parseFloat(idleConf.toFixed(2)),
-      squat: parseFloat(squatConf.toFixed(2)),
-      jump: parseFloat(jumpConf.toFixed(2)),
-      run: parseFloat(runConf.toFixed(2))
+      idle: Math.round(idleConf * 100),
+      squat: Math.round(squatConf * 100),
+      jump: Math.round(jumpConf * 100),
+      run: Math.round(runConf * 100)
     },
-    kneeAvg: Math.round(kneeAvg),
+    bodyScalePct,
     leftKnee: Math.round(leftKnee),
     rightKnee: Math.round(rightKnee),
-    hipSpeed: parseFloat(hipSpeed.toFixed(3)),
-    ankleAsymmetry: parseFloat(maxAnkleAsymmetry.toFixed(3)),
+    hipSpeed: normHipSpeed.toFixed(3),
     kneeFlips,
-    feetAirborne,
-    visScore: parseFloat(visScore.toFixed(2))
-  };
+    normAnkleAsymmetry: normAnkleAsymmetry.toFixed(2),
+    grounded: feetAirborne ? "NO (AIRBORNE)" : "YES",
+    visScore: Math.round(visScore * 100)
+  });
 
-  return { ok: true, pos, act, x: rawX, screenX, footY, bodyH, kneeA: kneeAvg };
+  const analysisResult = { ok: true, pos, act, x: rawX, screenX, footY, hipY, bodyH: bodyHeight, bodyScalePct, visScore };
+  lastValidAnalysis = analysisResult;
+  return analysisResult;
 }
 
 function updateStateMachine(feetAirborne, kneeAvg) {
@@ -265,7 +280,7 @@ function updateStateMachine(feetAirborne, kneeAvg) {
       if (jumpConf > 0.45) {
         candidateFrameCount++;
         if (candidateFrameCount >= 2) {
-          currentState = FSMState.JUMPING; candidateFrameCount = 0; stateHoldFrames = 8;
+          currentState = FSMState.JUMPING; candidateFrameCount = 0; stateHoldFrames = 10;
         }
       } else { currentState = FSMState.IDLE; candidateFrameCount = 0; }
       break;
@@ -308,9 +323,20 @@ function getDisplayedAction() {
   return "IDLE";
 }
 
-// Full Body Calibration Verification
+function updateDebugPanel(info) {
+  if (!debugPanel) return;
+  dbgState.textContent = info.state;
+  dbgConf.textContent = `I:${info.confidences.idle}% S:${info.confidences.squat}% J:${info.confidences.jump}% R:${info.confidences.run}%`;
+  dbgScale.textContent = `${info.bodyScalePct}%`;
+  dbgKnees.textContent = `L:${info.leftKnee}° R:${info.rightKnee}°`;
+  dbgHipVel.textContent = info.hipSpeed;
+  dbgGait.textContent = `${info.kneeFlips} flips / ${info.normAnkleAsymmetry}`;
+  dbgQuality.textContent = `${info.grounded} / ${info.visScore}%`;
+}
+
+// Full Body Calibration & Proximity Verification (Section 3 & 14)
 function checkFullBodyVisibility(landmarks) {
-  if (!landmarks) return { isFull: false, reason: "No body detected. Please stand in front of the camera." };
+  if (!landmarks) return { isFull: false, reason: "No body detected. Please step into view." };
 
   const nose = landmarks[0];
   const leftShoulder = landmarks[11], rightShoulder = landmarks[12];
@@ -325,12 +351,21 @@ function checkFullBodyVisibility(landmarks) {
   const anklesOk = visible(leftAnkle) && visible(rightAnkle);
   const feetOk = anklesOk || (leftFoot && visible(leftFoot)) || (rightFoot && visible(rightFoot));
 
+  // 1. Proximity Check (Section 14): When Player is Too Close to Camera
+  const shoulderAvgY = (leftShoulder.y + rightShoulder.y) / 2;
+  const footAvgY = (leftFoot && visible(leftFoot)) ? leftFoot.y : (leftAnkle ? leftAnkle.y : 1.0);
+  const bodyH = dist(avg(leftShoulder, rightShoulder), avg(leftAnkle || leftHip, rightAnkle || rightHip));
+
+  if (bodyH > 0.84 || (shoulderAvgY < 0.06 && (!kneesOk || !feetOk))) {
+    return { isFull: false, isTooClose: true, reason: "STEP BACK — Standing too close to camera." };
+  }
+
   if (!shouldersOk || !hipsOk) {
     return { isFull: false, reason: "Torso not fully visible — step back from the camera." };
   }
 
-  const headY = nose ? nose.y : (leftShoulder.y - 0.15);
-  if (headY < 0.02) {
+  const headY = nose ? nose.y : (shoulderAvgY - 0.15);
+  if (headY < 0.01) {
     return { isFull: false, reason: "Head is cut off at top — step back or tilt camera up." };
   }
 
@@ -342,14 +377,13 @@ function checkFullBodyVisibility(landmarks) {
     return { isFull: false, reason: "Feet not visible — step back or tilt camera down." };
   }
 
-  const footY = (leftFoot && visible(leftFoot)) ? leftFoot.y : (leftAnkle ? leftAnkle.y : 1.0);
-  if (footY > 0.96) {
+  if (footAvgY > 0.98) {
     return { isFull: false, reason: "Feet cut off at bottom — step back slightly." };
   }
 
   const screenX = 1 - (leftHip.x + rightHip.x) / 2;
-  if (screenX < 0.12 || screenX > 0.88) {
-    return { isFull: false, reason: "Step towards the center of the frame." };
+  if (screenX < 0.08 || screenX > 0.92) {
+    return { isFull: false, reason: "Step towards the center of the screen." };
   }
 
   return { isFull: true, reason: "✓ Full body detected!" };
@@ -360,9 +394,9 @@ function calibrateFrame(landmarks, result) {
 
   if (!bodyCheck.isFull) {
     stableFullBodyFrames = Math.max(0, stableFullBodyFrames - 2);
-    if (badgeEl) {
-      badgeEl.textContent = "INCOMPLETE BODY";
-      badgeEl.className = "overlay-badge";
+    if (setupBadge) {
+      setupBadge.textContent = bodyCheck.isTooClose ? "STEP BACK" : "INCOMPLETE BODY";
+      setupBadge.className = "setup-badge";
     }
     setupMessage.textContent = bodyCheck.reason;
     return;
@@ -372,27 +406,25 @@ function calibrateFrame(landmarks, result) {
   const progressPct = Math.min(100, Math.round((stableFullBodyFrames / REQUIRED_STABLE_FRAMES) * 100));
 
   if (stableFullBodyFrames < REQUIRED_STABLE_FRAMES) {
-    if (badgeEl) {
-      badgeEl.textContent = `VERIFYING STABILITY ${progressPct}%`;
-      badgeEl.className = "overlay-badge verifying";
+    if (setupBadge) {
+      setupBadge.textContent = `VERIFYING STABILITY ${progressPct}%`;
+      setupBadge.className = "setup-badge verifying";
     }
     const remainingSec = (Math.ceil((REQUIRED_STABLE_FRAMES - stableFullBodyFrames) / 25 * 10) / 10).toFixed(1);
-    setupMessage.textContent = `Full body detected! Hold still to auto-start game (${remainingSec}s)...`;
+    setupMessage.textContent = `Full body detected! Hold still to auto-start (${remainingSec}s)...`;
   } else {
-    // AUTOMATIC TRANSITION TO GAME ACTIVE - NO BUTTON CLICK REQUIRED!
-    if (badgeEl) {
-      badgeEl.textContent = "STARTING GAME! ✓";
-      badgeEl.className = "overlay-badge ready";
+    // AUTOMATIC START TRANSITION
+    if (setupBadge) {
+      setupBadge.textContent = "GAME STARTING! ✓";
+      setupBadge.className = "setup-badge ready";
     }
     setupMessage.textContent = "Full body locked! Auto-starting game...";
     
-    calibration = { baselineFootY: result.footY, centerX: result.screenX };
+    calibration = { baselineFootY: result.footY, baselineHipY: result.hipY, centerX: result.screenX };
+    gameActive = true;
 
-    // Auto-transition to gameplay
-    appEl.className = "game-mode";
-    setup.classList.remove("active");
-    game.classList.add("active");
-    gameVideoHolder.appendChild(cameraContainer);
+    // Auto-transition
+    setupOverlay.classList.remove("active");
     actionEl.textContent = "IDLE";
     positionEl.textContent = "CENTER";
     currentState = FSMState.IDLE;
@@ -402,66 +434,84 @@ function calibrateFrame(landmarks, result) {
 }
 
 function onResults(results) {
-  overlay.width = video.videoWidth || 640;
-  overlay.height = video.videoHeight || 480;
+  overlay.width = video.videoWidth || window.innerWidth;
+  overlay.height = video.videoHeight || window.innerHeight;
   ctx.clearRect(0, 0, overlay.width, overlay.height);
 
   if (!results.poseLandmarks) {
     statusEl.textContent = "NO BODY";
-    if (setup.classList.contains("active")) {
-      if (badgeEl) {
-        badgeEl.textContent = "NO BODY DETECTED";
-        badgeEl.className = "overlay-badge";
+    if (!gameActive) {
+      if (setupBadge) {
+        setupBadge.textContent = "NO BODY DETECTED";
+        setupBadge.className = "setup-badge";
       }
       setupMessage.textContent = "No body detected. Step in front of the camera.";
-    } else if (game.classList.contains("active")) {
-      warning.classList.remove("hidden");
-      warning.textContent = "MOVE INTO THE PLAY AREA";
-      confidenceEl.textContent = "DETECTION: PAUSED — NO BODY DETECTED";
-      actionEl.textContent = "PAUSED";
-      inGameResumeFrames = 0;
+    } else {
+      // LOST-VISION GRACE PERIOD FOR GAMEPLAY
+      handleLandmarkLoss("NO BODY DETECTED");
     }
     return;
   }
 
   const r = analyze(results.poseLandmarks);
 
-  if (setup.classList.contains("active")) {
+  if (!gameActive) {
     calibrateFrame(results.poseLandmarks, r);
     drawSkeleton(results.poseLandmarks);
     return;
   }
 
-  // IN-GAME PLAY AREA & OUT-OF-BOUNDS AUTO PAUSE / AUTO RESUME
+  // GAME ACTIVE MONITORING & LOST-VISION GRACE PERIOD (Section 4)
   const bodyCheck = checkFullBodyVisibility(results.poseLandmarks);
-  const inZone = r.screenX > .08 && r.screenX < .92 && r.footY < .99;
 
-  if (!bodyCheck.isFull || !inZone || !r.ok) {
-    inGameResumeFrames = 0;
-    warning.classList.remove("hidden");
-    warning.textContent = "MOVE INTO THE PLAY AREA";
-    confidenceEl.textContent = "DETECTION: PAUSED — MOVE INTO PLAY AREA";
-    actionEl.textContent = "PAUSED";
-    positionEl.textContent = r.pos || "CENTER";
-    statusEl.textContent = "PAUSED";
+  if (!r.ok || !bodyCheck.isFull) {
+    if (bodyCheck.isTooClose) {
+      warning.classList.remove("hidden");
+      warning.classList.add("step-back");
+      warning.textContent = "STEP BACK — STANDING TOO CLOSE";
+      confidenceEl.textContent = "DETECTION: STEP BACK FOR FULL VIEW";
+      actionEl.textContent = "STEP BACK";
+      drawSkeleton(results.poseLandmarks);
+      return;
+    }
+
+    // Short Vision Loss Grace Period (Section 4): Protect jumps & occlusion
+    handleLandmarkLoss(bodyCheck.reason);
     drawSkeleton(results.poseLandmarks);
     return;
   }
 
-  // Player returned fully into play area
-  inGameResumeFrames++;
-  if (inGameResumeFrames >= 8) { // ~0.3s stability to resume tracking cleanly
-    warning.classList.add("hidden");
-    actionEl.textContent = r.act;
-    positionEl.textContent = r.pos;
-    confidenceEl.textContent = `DETECTION: LOCKED  •  ${r.act} (${r.pos})`;
-    statusEl.textContent = "TRACKING ACTIVE";
-  } else {
-    actionEl.textContent = "RESUMING...";
-    confidenceEl.textContent = "DETECTION: VERIFYING POSITION...";
-  }
+  // Vision is clear! Reset grace period & present active tracking
+  gracePeriodCounter = 0;
+  warning.classList.add("hidden");
+  warning.classList.remove("step-back");
+  
+  actionEl.textContent = r.act;
+  positionEl.textContent = r.pos;
+  confidenceEl.textContent = `DETECTION: LOCKED  •  ${r.act} (${r.pos})`;
+  statusEl.textContent = "TRACKING ACTIVE";
 
   drawSkeleton(results.poseLandmarks);
+}
+
+function handleLandmarkLoss(reason) {
+  // LOST-VISION GRACE PERIOD (Section 4):
+  // Preserve previous stable state during short vision loss (e.g. jumping high)
+  if (gracePeriodCounter < MAX_GRACE_FRAMES && lastValidAnalysis) {
+    gracePeriodCounter++;
+    actionEl.textContent = lastValidAnalysis.act;
+    positionEl.textContent = lastValidAnalysis.pos;
+    confidenceEl.textContent = `DETECTION: TRACKING (GRACE PERIOD ${Math.round((MAX_GRACE_FRAMES - gracePeriodCounter)/25*10)/10}s)`;
+    statusEl.textContent = "JUMP / MOTION BUFFER";
+  } else {
+    // Grace period expired -> declare out of bounds / paused
+    warning.classList.remove("hidden");
+    warning.classList.remove("step-back");
+    warning.textContent = "MOVE INTO THE PLAY AREA";
+    confidenceEl.textContent = `DETECTION: PAUSED — ${reason}`;
+    actionEl.textContent = "PAUSED";
+    statusEl.textContent = "PAUSED";
+  }
 }
 
 function drawSkeleton(ls) {
@@ -504,10 +554,9 @@ async function startCamera() {
     video.srcObject = stream;
     await video.play();
 
-    setupVideoHolder.appendChild(cameraContainer);
     statusEl.textContent = "CAMERA ACTIVE";
     setupMessage.textContent = "Camera active! Step into the play area and show your full body.";
-    if (badgeEl) badgeEl.textContent = "CAMERA LIVE";
+    if (setupBadge) setupBadge.textContent = "CAMERA LIVE";
 
     pose = new Pose({
       locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/pose@0.5.1675469404/${file}`
@@ -539,22 +588,9 @@ async function startCamera() {
   } catch (e) {
     statusEl.textContent = "CAMERA ERROR";
     setupMessage.textContent = "Camera access blocked. Please allow camera permissions in browser header and reload.";
-    if (badgeEl) badgeEl.textContent = "PERMISSION DENIED";
+    if (setupBadge) setupBadge.textContent = "PERMISSION DENIED";
     console.error("Camera error:", e);
   }
 }
-
-recalibrate.onclick = () => {
-  appEl.className = "setup-mode";
-  game.classList.remove("active");
-  setup.classList.add("active");
-  setupVideoHolder.appendChild(cameraContainer);
-  stableFullBodyFrames = 0;
-  inGameResumeFrames = 0;
-  currentState = FSMState.IDLE;
-  idleConf = 1.0; squatConf = 0.0; jumpConf = 0.0; runConf = 0.0;
-  setupMessage.textContent = "Step into the play area and show your full body.";
-  statusEl.textContent = "CALIBRATING";
-};
 
 startCamera();

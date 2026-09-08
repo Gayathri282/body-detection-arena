@@ -9,52 +9,58 @@
 <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
 </head>
 <body>
-<div id="app" class="setup-mode">
-  <header>
-    <div class="brand">MOTION ARENA</div>
-    <div id="status" class="status">CAMERA STARTING</div>
-  </header>
-
-  <main>
-    <section id="setup" class="screen active">
-      <div class="setup-card">
-        <div class="eyebrow">CAMERA CALIBRATION</div>
-        <h1>Stand inside the play area.</h1>
-        <p>Ensure your head, torso, and feet are visible in the camera preview below.</p>
-        
-        <div class="preview-box">
-          <div class="video-holder" id="setupVideoHolder">
-            <!-- Video & canvas will move here dynamically or sit in camera-container -->
-          </div>
-          <div id="setupOverlayBadge" class="overlay-badge">INITIALIZING CAMERA...</div>
-        </div>
-
-        <div id="setupMessage" class="setup-message">Starting camera feed...</div>
-      </div>
-    </section>
-
-    <section id="game" class="screen">
-      <div class="readout">
-        <div class="label">ACTION</div>
-        <div id="action" class="value">IDLE</div>
-        <div class="label position-label">POSITION</div>
-        <div id="position" class="value">CENTER</div>
-      </div>
-      <div class="confidence" id="confidence">DETECTION: WAITING</div>
-      
-      <div class="game-video-holder" id="gameVideoHolder">
-        <!-- Floating PIP container for game mode -->
-      </div>
-
-      <div id="boundaryWarning" class="warning hidden">MOVE INTO THE PLAY AREA</div>
-      <button id="recalibrate" class="secondary">RECALIBRATE</button>
-    </section>
-  </main>
-
-  <!-- Global Shared Video Stream Container -->
-  <div id="cameraContainer" class="camera-container setup-view">
+<div id="app">
+  <!-- Full-Screen Camera Game Board -->
+  <div id="cameraContainer" class="full-screen-camera">
     <video id="video" autoplay playsinline muted></video>
     <canvas id="overlay"></canvas>
+
+    <!-- Subtle Play Area Perimeter & Zone Guides -->
+    <div id="playAreaGuide" class="play-area-guide">
+      <div class="guide-zone zone-left"><span>LEFT</span></div>
+      <div class="guide-zone zone-center"><span>CENTER</span></div>
+      <div class="guide-zone zone-right"><span>RIGHT</span></div>
+    </div>
+  </div>
+
+  <!-- Minimal Transparent HUD Overlay -->
+  <header class="hud-header">
+    <div class="brand">MOTION ARENA</div>
+    <div id="status" class="status-badge">CAMERA STARTING</div>
+  </header>
+
+  <!-- Auto-Start Calibration Overlay (Visible only during initial auto-start) -->
+  <div id="setupOverlay" class="setup-overlay active">
+    <div id="setupBadge" class="setup-badge">INITIALIZING CAMERA...</div>
+    <div id="setupMessage" class="setup-message">Step into the play area to start.</div>
+  </div>
+
+  <!-- Minimal In-Game HUD -->
+  <main class="hud-main">
+    <div class="hud-readout">
+      <div class="hud-item">
+        <span class="hud-label">ACTION</span>
+        <div id="action" class="hud-value action-value">IDLE</div>
+      </div>
+      <div class="hud-item">
+        <span class="hud-label">POSITION</span>
+        <div id="position" class="hud-value position-value">CENTER</div>
+      </div>
+    </div>
+    <div id="confidence" class="hud-confidence">DETECTION: WAITING</div>
+    <div id="boundaryWarning" class="warning-banner hidden">MOVE INTO THE PLAY AREA</div>
+  </main>
+
+  <!-- Developer Debug Information Panel -->
+  <div id="debugPanel" class="debug-panel">
+    <div class="debug-title">DEV MOTION DEBUG</div>
+    <div class="debug-row"><span>State:</span> <strong id="dbgState">IDLE</strong></div>
+    <div class="debug-row"><span>Action Conf:</span> <span id="dbgConf">I:100% S:0% J:0% R:0%</span></div>
+    <div class="debug-row"><span>Body Scale:</span> <span id="dbgScale">0%</span></div>
+    <div class="debug-row"><span>Knee Angles:</span> <span id="dbgKnees">L:180° R:180°</span></div>
+    <div class="debug-row"><span>Hip Vert Vel:</span> <span id="dbgHipVel">0.000</span></div>
+    <div class="debug-row"><span>Gait Flips / Asym:</span> <span id="dbgGait">0 / 0.00</span></div>
+    <div class="debug-row"><span>Grounded / Quality:</span> <span id="dbgQuality">YES / 100%</span></div>
   </div>
 </div>
 <script src="app.js"></script>

@@ -1,56 +1,55 @@
 *{box-sizing:border-box}
-html,body{margin:0;width:100%;height:100%;font-family:Inter,-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Arial,sans-serif;background:#0d0f12;color:#f0f2f5}
-body{overflow:hidden}
+html,body{margin:0;padding:0;width:100vw;height:100vh;overflow:hidden;font-family:Inter,-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Arial,sans-serif;background:#05070a;color:#f8fafc}
 
-#app{height:100%;display:flex;flex-direction:column;position:relative}
+#app{position:relative;width:100vw;height:100vh;overflow:hidden}
 
-header{height:60px;border-bottom:1px solid #22262e;display:flex;align-items:center;justify-content:space-between;padding:0 28px;background:#13161c}
-.brand{font-weight:900;letter-spacing:.14em;font-size:14px;color:#38bdf8}
-.status{font-size:11px;font-weight:700;letter-spacing:.12em;padding:4px 10px;border-radius:20px;background:#1e2430;color:#94a3b8}
+/* Full-Screen Camera Game Board */
+.full-screen-camera{position:fixed;inset:0;width:100vw;height:100vh;z-index:1;overflow:hidden;background:#090d14}
 
-.screen{display:none;height:calc(100vh - 60px);position:relative}
-.screen.active{display:block}
-
-/* Setup Mode */
-.setup-card{width:min(680px,92vw);margin:4vh auto 0;text-align:center;display:flex;flex-direction:column;align-items:center}
-.eyebrow{font-size:11px;font-weight:800;letter-spacing:.16em;color:#0ea5e9;margin-bottom:6px}
-.setup-card h1{font-size:36px;font-weight:800;line-height:1.1;margin:6px 0;letter-spacing:-.02em}
-.setup-card p{max-width:520px;line-height:1.5;color:#94a3b8;font-size:14px;margin:0 0 20px}
-
-.preview-box{width:100%;max-width:540px;height:310px;position:relative;border-radius:14px;overflow:hidden;border:2px solid #22262e;background:#171b22;box-shadow:0 12px 32px rgba(0,0,0,.4)}
-
-.overlay-badge{position:absolute;top:14px;left:50%;transform:translateX(-50%);background:rgba(15,23,42,.85);backdrop-filter:blur(8px);color:#f8fafc;padding:7px 16px;border-radius:20px;font-size:11px;font-weight:700;letter-spacing:.08em;border:1px solid rgba(255,255,255,.1);z-index:5;transition:all .2s ease}
-.overlay-badge.verifying{background:rgba(245,158,11,.9);color:#0f172a;border-color:rgba(245,158,11,1);font-weight:800;animation:pulse 1s infinite alternate}
-.overlay-badge.ready{background:rgba(16,185,129,.95);color:#fff;border-color:rgba(16,185,129,1);font-weight:800}
-
-@keyframes pulse { from { transform: translateX(-50%) scale(1); } to { transform: translateX(-50%) scale(1.04); } }
-
-.setup-message{font-size:13px;margin:16px 0;color:#cbd5e1;font-weight:600}
-
-button.primary-btn{border:none;background:#10b981;color:#ffffff;padding:14px 32px;font-size:13px;font-weight:800;letter-spacing:.1em;border-radius:8px;cursor:pointer;transition:all .2s ease;box-shadow:0 4px 12px rgba(16,185,129,.3)}
-button.primary-btn:hover:not(:disabled){background:#34d399;transform:translateY(-1px);box-shadow:0 6px 16px rgba(16,185,129,.4)}
-button.primary-btn:disabled{background:#1e293b;color:#64748b;opacity:.6;cursor:not-allowed;transform:none;box-shadow:none;border:1px solid #334155}
-
-/* Shared Camera Container */
-.camera-container{position:absolute;transition:all .3s ease-in-out;overflow:hidden}
-
-#app.setup-mode .camera-container{top:50%;left:50%;transform:translate(-50%,-50%);width:100%;height:100%;position:absolute}
-
-#app.game-mode .camera-container{position:fixed;right:28px;bottom:28px;width:280px;height:210px;border-radius:12px;border:2px solid #334155;box-shadow:0 8px 24px rgba(0,0,0,.5);z-index:20}
-
-#video,#overlay{position:absolute;top:0;left:0;width:100%;height:100%;object-fit:cover;transform:scaleX(-1)}
+#video,#overlay{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;transform:scaleX(-1)}
 #overlay{pointer-events:none;z-index:2}
 
-/* Game Mode Readout */
-.readout{position:absolute;left:7vw;top:10vh;z-index:3}
-.label{font-size:11px;font-weight:800;letter-spacing:.14em;color:#64748b}
-.value{font-size:clamp(60px,10vw,140px);font-weight:900;line-height:.9;letter-spacing:-.05em;color:#f8fafc}
-.position-label{margin-top:40px}
+/* Play Area Perimeter & Subtle Zone Guides */
+.play-area-guide{position:absolute;inset:0;display:flex;pointer-events:none;z-index:3}
+.guide-zone{flex:1;height:100%;border-right:1px dashed rgba(255,255,255,.12);position:relative;display:flex;align-items:flex-end;justify-content:center;padding-bottom:24px}
+.guide-zone:last-child{border-right:none}
+.guide-zone span{font-size:10px;font-weight:900;letter-spacing:.2em;color:rgba(255,255,255,.25);background:rgba(15,23,42,.4);padding:4px 12px;border-radius:12px;backdrop-filter:blur(4px)}
 
-.confidence{position:absolute;left:7vw;bottom:6vh;font-size:11px;font-weight:800;letter-spacing:.12em;color:#38bdf8;z-index:3}
+/* HUD Header */
+.hud-header{position:absolute;top:20px;left:28px;right:28px;display:flex;align-items:center;justify-content:space-between;z-index:10;pointer-events:none}
+.brand{font-weight:900;letter-spacing:.16em;font-size:14px;color:#38bdf8;text-shadow:0 2px 8px rgba(0,0,0,.8)}
+.status-badge{font-size:11px;font-weight:800;letter-spacing:.12em;padding:6px 14px;border-radius:20px;background:rgba(15,23,42,.75);backdrop-filter:blur(8px);border:1px solid rgba(255,255,255,.1);color:#94a3b8}
 
-.warning{position:absolute;top:28px;left:50%;transform:translateX(-50%);border:1px solid #ef4444;background:rgba(239,68,68,.15);color:#fca5a5;padding:12px 24px;border-radius:8px;font-size:12px;font-weight:800;letter-spacing:.08em;backdrop-filter:blur(6px);z-index:10}
+/* Auto-Start Calibration Overlay */
+.setup-overlay{position:absolute;top:100px;left:50%;transform:translateX(-50%);z-index:10;text-align:center;pointer-events:none;transition:opacity .3s ease}
+.setup-overlay:not(.active){display:none}
+
+.setup-badge{display:inline-block;background:rgba(15,23,42,.85);backdrop-filter:blur(10px);color:#f8fafc;padding:8px 20px;border-radius:24px;font-size:12px;font-weight:800;letter-spacing:.1em;border:1px solid rgba(255,255,255,.15);box-shadow:0 8px 24px rgba(0,0,0,.5)}
+.setup-badge.verifying{background:rgba(245,158,11,.9);color:#0f172a;border-color:rgba(245,158,11,1);animation:pulse 1s infinite alternate}
+.setup-badge.ready{background:rgba(16,185,129,.95);color:#fff;border-color:rgba(16,185,129,1)}
+
+@keyframes pulse { from { transform: scale(1); } to { transform: scale(1.04); } }
+
+.setup-message{font-size:14px;margin-top:10px;color:#f1f5f9;font-weight:700;text-shadow:0 2px 10px rgba(0,0,0,.9);background:rgba(0,0,0,.4);padding:6px 16px;border-radius:20px;backdrop-filter:blur(6px)}
+
+/* Minimal In-Game HUD Overlay */
+.hud-main{position:absolute;inset:0;pointer-events:none;z-index:10}
+.hud-readout{position:absolute;left:5vw;top:15vh}
+.hud-item{margin-bottom:24px}
+.hud-label{font-size:11px;font-weight:900;letter-spacing:.18em;color:#94a3b8;text-shadow:0 2px 6px rgba(0,0,0,.8);display:block;margin-bottom:2px}
+.hud-value{font-size:clamp(55px,8vw,120px);font-weight:900;line-height:.85;letter-spacing:-.04em;color:#f8fafc;text-shadow:0 4px 20px rgba(0,0,0,.9)}
+.action-value{color:#38bdf8}
+.position-value{color:#f8fafc}
+
+.hud-confidence{position:absolute;left:5vw;bottom:5vh;font-size:11px;font-weight:800;letter-spacing:.12em;color:#38bdf8;text-shadow:0 2px 8px rgba(0,0,0,.9);background:rgba(15,23,42,.6);padding:6px 14px;border-radius:20px;backdrop-filter:blur(6px);border:1px solid rgba(255,255,255,.08)}
+
+/* Warning Banner */
+.warning-banner{position:absolute;top:100px;left:50%;transform:translateX(-50%);border:1px solid #ef4444;background:rgba(239,68,68,.9);color:#ffffff;padding:12px 28px;border-radius:30px;font-size:13px;font-weight:900;letter-spacing:.12em;box-shadow:0 10px 30px rgba(239,68,68,.4);backdrop-filter:blur(8px);z-index:20}
+.warning-banner.step-back{background:rgba(245,158,11,.95);border-color:#f59e0b;color:#0f172a;box-shadow:0 10px 30px rgba(245,158,11,.4)}
 .hidden{display:none!important}
 
-.secondary{position:absolute;right:28px;top:28px;background:#1e2430;color:#f1f5f9;border:1px solid #334155;padding:10px 16px;font-size:11px;font-weight:700;border-radius:6px;cursor:pointer;z-index:10}
-.secondary:hover{background:#334155}
+/* Developer Debug Panel */
+.debug-panel{position:absolute;top:70px;right:28px;width:240px;background:rgba(15,23,42,.85);backdrop-filter:blur(10px);border:1px solid rgba(255,255,255,.12);border-radius:12px;padding:12px 14px;font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:10px;color:#cbd5e1;z-index:30;box-shadow:0 10px 30px rgba(0,0,0,.5);pointer-events:auto}
+.debug-title{font-weight:900;letter-spacing:.1em;color:#38bdf8;margin-bottom:8px;border-bottom:1px solid rgba(255,255,255,.1);padding-bottom:4px}
+.debug-row{display:flex;justify-content:space-between;margin-bottom:4px}
+.debug-row strong{color:#10b981}
