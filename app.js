@@ -183,28 +183,39 @@ function analyze(landmarks) {
   }
 
   // --- RUNNING FEATURE (ALTERNATING GAIT ENGINE - Section 9) ---
-  let kneeFlips = 0;
-  for (let i = 1; i < frameHistory.length; i++) {
-    const prevDiff = frameHistory[i - 1].kneeDiff;
-    const currDiff = frameHistory[i].kneeDiff;
-    if ((prevDiff > 8 && currDiff < -8) || (prevDiff < -8 && currDiff > 8)) {
-      kneeFlips++;
-    }
-  }
+  // Calculate leg asymmetry & gait oscillation across the rolling 1-second history window
+  const allKneeDiffs = frameHistory.map(f => f.kneeDiff);
+  const maxKneeDiff = Math.max(...allKneeDiffs);
+  const minKneeDiff = Math.min(...allKneeDiffs);
+  const gaitRange = maxKneeDiff - minKneeDiff; // Full peak-to-trough range of leg asymmetry
 
+  const currentKneeAsymmetry = Math.abs(leftKnee - rightKnee);
   const maxKneeAsymmetry = Math.max(...frameHistory.map(f => Math.abs(f.kneeDiff)));
-  const maxAnkleAsymmetry = Math.max(...frameHistory.map(f => Math.abs(f.ankleYDiff)));
-  const normAnkleAsymmetry = maxAnkleAsymmetry / bodyHeight;
+  
+  // Rate of knee angle change over recent frames (leg movement activity)
+  const kneeMotionSpeed = Math.abs(leftKnee - firstFrame.leftKnee) + Math.abs(rightKnee - firstFrame.rightKnee);
 
   let runScore = 0.0;
-  if (kneeFlips >= 1 && maxKneeAsymmetry > 18 && !bothKneesBent) runScore += 0.55;
-  if (normAnkleAsymmetry > 0.07 && maxKneeAsymmetry > 18 && !bothKneesBent) runScore += 0.35;
-  if (maxKneeAsymmetry > 22 && normHipSpeed > 0.04 && !bothKneesBent) runScore += 0.25;
+
+  // Key Running Signals:
+  // 1. Gait alternation (left leg flexed, then right leg flexed across rolling window): gaitRange > 18°
+  if (gaitRange > 18 && !bothKneesBent) {
+    runScore += 0.55;
+  }
+  // 2. High leg asymmetry (one leg bent while other is extended): maxKneeAsymmetry > 16°
+  if (maxKneeAsymmetry > 16 && !bothKneesBent) {
+    runScore += 0.35;
+  }
+  // 3. Active leg motion speed (legs actively moving): kneeMotionSpeed > 14°
+  if (kneeMotionSpeed > 14 && currentKneeAsymmetry > 12 && !bothKneesBent) {
+    runScore += 0.25;
+  }
 
   // CRUCIAL DISAMBIGUATION:
   // 1. If BOTH knees are bent (Squatting), RUNNING MUST BE 0.0!
   // 2. If body is jumping or ascending from squat, RUNNING MUST BE 0.0!
-  if (bothKneesBent || deepKneeBend || maxKneeAsymmetry < 14 || isJumpTrajectory || isSquatAscending) {
+  // 3. If legs are symmetric (maxKneeAsymmetry < 12°), RUNNING MUST BE 0.0!
+  if (bothKneesBent || deepKneeBend || maxKneeAsymmetry < 12 || isJumpTrajectory || isSquatAscending) {
     runScore = 0.0;
   }
 
@@ -215,7 +226,8 @@ function analyze(landmarks) {
   let idleRaw = Math.max(0.0, 1.0 - activeSum);
 
   // Dead-zone tolerance for breathing, small posture/arm shifts, camera jitter
-  if (normHipSpeed < 0.06 && !feetAirborne && maxKneeAsymmetry < 16 && kneeAvg > 155 && !bothKneesBent) {
+  // BUT do not override if there is active running (runRaw >= 0.35) or active squat/jump!
+  if (normHipSpeed < 0.06 && !feetAirborne && maxKneeAsymmetry < 14 && kneeAvg > 155 && !bothKneesBent && runRaw < 0.35) {
     idleRaw = 1.0; squatRaw = 0.0; jumpRaw = 0.0; runRaw = 0.0;
   }
 
