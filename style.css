@@ -24,9 +24,9 @@ header{height:60px;border-bottom:1px solid #22262e;display:flex;align-items:cent
 
 .setup-message{font-size:13px;margin:16px 0;color:#cbd5e1;font-weight:600}
 
-button.primary-btn{border:none;background:#38bdf8;color:#0f172a;padding:14px 32px;font-size:13px;font-weight:800;letter-spacing:.1em;border-radius:8px;cursor:pointer;transition:all .2s ease}
-button.primary-btn:hover{background:#7dd3fc;transform:translateY(-1px)}
-button.primary-btn:disabled{opacity:.4;cursor:not-allowed;transform:none}
+button.primary-btn{border:none;background:#10b981;color:#ffffff;padding:14px 32px;font-size:13px;font-weight:800;letter-spacing:.1em;border-radius:8px;cursor:pointer;transition:all .2s ease;box-shadow:0 4px 12px rgba(16,185,129,.3)}
+button.primary-btn:hover:not(:disabled){background:#34d399;transform:translateY(-1px);box-shadow:0 6px 16px rgba(16,185,129,.4)}
+button.primary-btn:disabled{background:#1e293b;color:#64748b;opacity:.6;cursor:not-allowed;transform:none;box-shadow:none;border:1px solid #334155}
 
 /* Shared Camera Container */
 .camera-container{position:absolute;transition:all .3s ease-in-out;overflow:hidden}

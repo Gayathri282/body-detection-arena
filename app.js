@@ -113,25 +113,74 @@ function analyze(landmarks){
   return { ok: true, pos, act, x: rawX, screenX, footY, bodyH, kneeA };
 }
 
-function calibrateFrame(result){
-  if(!result.ok){
+function checkFullBodyVisibility(landmarks){
+  if(!landmarks) return { isFull: false, reason: "No body detected. Please stand in front of the camera." };
+
+  const nose = landmarks[0];
+  const leftShoulder = landmarks[11], rightShoulder = landmarks[12];
+  const leftHip = landmarks[23], rightHip = landmarks[24];
+  const leftKnee = landmarks[25], rightKnee = landmarks[26];
+  const leftAnkle = landmarks[27], rightAnkle = landmarks[28];
+  const leftFoot = landmarks[31], rightFoot = landmarks[32];
+
+  const shouldersOk = visible(leftShoulder) && visible(rightShoulder);
+  const hipsOk = visible(leftHip) && visible(rightHip);
+  const kneesOk = visible(leftKnee) && visible(rightKnee);
+  const anklesOk = visible(leftAnkle) && visible(rightAnkle);
+  const feetOk = anklesOk || (leftFoot && visible(leftFoot)) || (rightFoot && visible(rightFoot));
+
+  if(!shouldersOk || !hipsOk){
+    return { isFull: false, reason: "Torso not fully visible — step back from the camera." };
+  }
+
+  const headY = nose ? nose.y : (leftShoulder.y - 0.15);
+  if(headY < 0.02){
+    return { isFull: false, reason: "Head is cut off at top — step back or tilt camera up." };
+  }
+
+  if(!kneesOk){
+    return { isFull: false, reason: "Knees and lower body not visible — step back." };
+  }
+
+  if(!feetOk){
+    return { isFull: false, reason: "Feet not visible — step back or tilt camera down." };
+  }
+
+  const footY = (leftFoot && visible(leftFoot)) ? leftFoot.y : (leftAnkle ? leftAnkle.y : 1.0);
+  if(footY > 0.97){
+    return { isFull: false, reason: "Feet cut off at bottom — step back slightly." };
+  }
+
+  const screenX = 1 - (leftHip.x + rightHip.x) / 2;
+  if(screenX < 0.12 || screenX > 0.88){
+    return { isFull: false, reason: "Step towards the center of the frame." };
+  }
+
+  return { isFull: true, reason: "✓ Full body detected! Click START GAME to play." };
+}
+
+function calibrateFrame(landmarks, result){
+  const bodyCheck = checkFullBodyVisibility(landmarks);
+
+  if(!bodyCheck.isFull){
     readyFrames = Math.max(0, readyFrames - 1);
-    if(badgeEl) { badgeEl.textContent = "CAMERA LIVE — STEP BACK"; badgeEl.classList.remove("ready"); }
-    setupMessage.textContent = "Step back until upper body and feet are visible.";
+    startBtn.disabled = true;
+    if(badgeEl) { badgeEl.textContent = "INCOMPLETE BODY"; badgeEl.classList.remove("ready"); }
+    setupMessage.textContent = bodyCheck.reason;
     return;
   }
 
-  const footY = result.footY;
-  const full = result.bodyH > .28 && footY < .99;
-  if(full) readyFrames++; else readyFrames = Math.max(0, readyFrames - 1);
+  readyFrames++;
 
   if(readyFrames >= 8){
-    calibration = { baselineFootY: footY, centerX: result.screenX };
+    calibration = { baselineFootY: result.footY, centerX: result.screenX };
+    startBtn.disabled = false;
     if(badgeEl) { badgeEl.textContent = "BODY LOCKED ✓ READY"; badgeEl.classList.add("ready"); }
-    setupMessage.textContent = "Full body detected! Click START GAME to enter the arena.";
+    setupMessage.textContent = bodyCheck.reason;
   } else {
-    if(badgeEl) { badgeEl.textContent = "DETECTING BODY..."; badgeEl.classList.remove("ready"); }
-    setupMessage.textContent = "Hold still inside the play frame.";
+    startBtn.disabled = true;
+    if(badgeEl) { badgeEl.textContent = "VERIFYING POSE..."; badgeEl.classList.remove("ready"); }
+    setupMessage.textContent = "Hold still for calibration...";
   }
 }
 
@@ -142,9 +191,13 @@ function onResults(results){
 
   if(!results.poseLandmarks){
     statusEl.textContent = "NO BODY";
-    if(setup.classList.contains("active") && badgeEl){
-      badgeEl.textContent = "NO BODY DETECTED";
-      badgeEl.classList.remove("ready");
+    if(setup.classList.contains("active")){
+      startBtn.disabled = true;
+      if(badgeEl){
+        badgeEl.textContent = "NO BODY DETECTED";
+        badgeEl.classList.remove("ready");
+      }
+      setupMessage.textContent = "No body detected. Step in front of the camera.";
     }
     return;
   }
@@ -152,7 +205,7 @@ function onResults(results){
   const r = analyze(results.poseLandmarks);
   
   if(setup.classList.contains("active")){
-    calibrateFrame(r);
+    calibrateFrame(results.poseLandmarks, r);
     drawSkeleton(results.poseLandmarks);
     return;
   }
@@ -222,7 +275,7 @@ async function startCamera(){
     statusEl.textContent = "CAMERA ACTIVE";
     setupMessage.textContent = "Camera active! Step back to align your body.";
     if(badgeEl) badgeEl.textContent = "CAMERA LIVE";
-    startBtn.disabled = false;
+    startBtn.disabled = true;
 
     pose = new Pose({
       locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/pose@0.5.1675469404/${file}`
