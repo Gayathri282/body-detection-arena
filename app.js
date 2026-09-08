@@ -151,18 +151,18 @@ function analyze(landmarks) {
   const normFootDy = (firstFrame.footY - footY) / bodyHeight;
   const normHipSpeed = Math.abs(normHipDy) / dt;
 
-  // Ground / Airborne check (Normalized)
+  // Ground / Airborne check (Strict Normalized Threshold to prevent Idle Jumping)
   const normFeetElev = (baseFootY - footY) / bodyHeight;
-  const feetAirborne = normFeetElev > 0.07 || normFootDy > 0.06;
+  const feetAirborne = normFeetElev > 0.085 && normHipDy > 0.04;
 
   // --- SQUATTING FEATURE (RELATIVE GEOMETRY - Section 7) ---
-  const bothKneesBent = leftKnee < 140 && rightKnee < 140;
-  const deepKneeBend = kneeAvg < 135;
+  const bothKneesBent = leftKnee < 145 && rightKnee < 145;
+  const deepKneeBend = kneeAvg < 138;
   const normHipDescent = (hipY - baseHipY) / bodyHeight;
   const isSquatAscending = (currentState === FSMState.SQUATTING || currentState === FSMState.SQUAT_CANDIDATE) && normHipDy > 0.03 && kneeAvg < 162;
 
   let squatRaw = 0.0;
-  if (bothKneesBent || deepKneeBend || (normHipDescent > 0.10 && kneeAvg < 148)) {
+  if (bothKneesBent || deepKneeBend || (normHipDescent > 0.08 && kneeAvg < 150)) {
     squatRaw = Math.min(1.0, 0.4 + (145 - Math.min(leftKnee, rightKnee)) / 50);
   } else if (isSquatAscending) {
     squatRaw = 0.65; // Protect continuous squatting event during ASCENDING phase
@@ -173,11 +173,11 @@ function analyze(landmarks) {
   const isJumpTrajectory = normUpwardCoherence > 0.04 && feetAirborne;
 
   let jumpRaw = 0.0;
-  if (isSquatAscending) {
-    jumpRaw = 0.0; // Squat ascent must NEVER trigger jumping
+  if (isSquatAscending || normFeetElev < 0.04) {
+    jumpRaw = 0.0; // Idle standing & squat ascent MUST NEVER trigger jumping
   } else if (isJumpTrajectory) {
     jumpRaw = Math.min(1.0, 0.5 + normFeetElev * 8 + normUpwardCoherence * 6);
-  } else if (feetAirborne && kneeAvg > 115 && normHipDy > 0.03) {
+  } else if (feetAirborne && kneeAvg > 115 && normHipDy > 0.035) {
     jumpRaw = 0.6;
   }
 
@@ -186,7 +186,7 @@ function analyze(landmarks) {
   for (let i = 1; i < frameHistory.length; i++) {
     const prevDiff = frameHistory[i - 1].kneeDiff;
     const currDiff = frameHistory[i].kneeDiff;
-    if ((prevDiff > 5 && currDiff < -5) || (prevDiff < -5 && currDiff > 5)) {
+    if ((prevDiff > 8 && currDiff < -8) || (prevDiff < -8 && currDiff > 8)) {
       kneeFlips++;
     }
   }
@@ -196,12 +196,14 @@ function analyze(landmarks) {
   const normAnkleAsymmetry = maxAnkleAsymmetry / bodyHeight;
 
   let runScore = 0.0;
-  if (kneeFlips >= 2 && maxKneeAsymmetry > 20) runScore += 0.55;
-  if (normAnkleAsymmetry > 0.08) runScore += 0.30;
-  if (maxKneeAsymmetry > 25 && normHipSpeed > 0.06) runScore += 0.25;
+  if (kneeFlips >= 1 && maxKneeAsymmetry > 18 && !bothKneesBent) runScore += 0.55;
+  if (normAnkleAsymmetry > 0.07 && maxKneeAsymmetry > 18 && !bothKneesBent) runScore += 0.35;
+  if (maxKneeAsymmetry > 22 && normHipSpeed > 0.04 && !bothKneesBent) runScore += 0.25;
 
-  // Suppress running if both legs move in sync or during squatting/jumping
-  if (maxKneeAsymmetry < 15 || isJumpTrajectory || isSquatAscending) {
+  // CRUCIAL DISAMBIGUATION:
+  // 1. If BOTH knees are bent (Squatting), RUNNING MUST BE 0.0!
+  // 2. If body is jumping or ascending from squat, RUNNING MUST BE 0.0!
+  if (bothKneesBent || deepKneeBend || maxKneeAsymmetry < 14 || isJumpTrajectory || isSquatAscending) {
     runScore = 0.0;
   }
 
@@ -367,6 +369,12 @@ function checkFullBodyVisibility(landmarks) {
   const headY = nose ? nose.y : (shoulderAvgY - 0.15);
   if (headY < 0.01) {
     return { isFull: false, reason: "Head is cut off at top — step back or tilt camera up." };
+  }
+
+  // During active gameplay, if hips and shoulders are clearly visible and player is squatting, protect from false pauses
+  const isSquatActive = (currentState === FSMState.SQUATTING || currentState === FSMState.SQUAT_CANDIDATE);
+  if (gameActive && shouldersOk && hipsOk && isSquatActive) {
+    return { isFull: true, reason: "✓ Full body detected!" };
   }
 
   if (!kneesOk) {
