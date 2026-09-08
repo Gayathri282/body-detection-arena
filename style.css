@@ -19,8 +19,11 @@ header{height:60px;border-bottom:1px solid #22262e;display:flex;align-items:cent
 
 .preview-box{width:100%;max-width:540px;height:310px;position:relative;border-radius:14px;overflow:hidden;border:2px solid #22262e;background:#171b22;box-shadow:0 12px 32px rgba(0,0,0,.4)}
 
-.overlay-badge{position:absolute;top:14px;left:50%;transform:translateX(-50%);background:rgba(15,23,42,.85);backdrop-filter:blur(8px);color:#f8fafc;padding:6px 14px;border-radius:20px;font-size:11px;font-weight:700;letter-spacing:.08em;border:1px solid rgba(255,255,255,.1);z-index:5}
-.overlay-badge.ready{background:rgba(16,185,129,.9);color:#fff}
+.overlay-badge{position:absolute;top:14px;left:50%;transform:translateX(-50%);background:rgba(15,23,42,.85);backdrop-filter:blur(8px);color:#f8fafc;padding:7px 16px;border-radius:20px;font-size:11px;font-weight:700;letter-spacing:.08em;border:1px solid rgba(255,255,255,.1);z-index:5;transition:all .2s ease}
+.overlay-badge.verifying{background:rgba(245,158,11,.9);color:#0f172a;border-color:rgba(245,158,11,1);font-weight:800;animation:pulse 1s infinite alternate}
+.overlay-badge.ready{background:rgba(16,185,129,.95);color:#fff;border-color:rgba(16,185,129,1);font-weight:800}
+
+@keyframes pulse { from { transform: translateX(-50%) scale(1); } to { transform: translateX(-50%) scale(1.04); } }
 
 .setup-message{font-size:13px;margin:16px 0;color:#cbd5e1;font-weight:600}
 
