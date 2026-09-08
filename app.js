@@ -97,8 +97,9 @@ function analyze(landmarks) {
   const ankle = (landmarks[27] && landmarks[28]) ? avg(landmarks[27], landmarks[28]) : knee;
   const foot = (landmarks[31] && landmarks[32] && visible(landmarks[31]) && visible(landmarks[32])) ? avg(landmarks[31], landmarks[32]) : ankle;
 
-  // NORMALIZED BODY GEOMETRY (Section 5): Normalize using full-body scale
-  const bodyHeight = Math.max(0.20, dist(shoulder, foot));
+  // NORMALIZED BODY GEOMETRY (Section 5): Normalize using full-body or torso scale fallback
+  const torsoH = dist(shoulder, hip);
+  const bodyHeight = Math.max(0.20, (visible(landmarks[27]) || visible(landmarks[31])) ? dist(shoulder, foot) : torsoH * 2.2);
   const bodyScalePct = Math.round(bodyHeight * 100);
 
   const leftKnee = (landmarks[23] && landmarks[25] && landmarks[27]) ? kneeAngle(landmarks[23], landmarks[25], landmarks[27]) : 180;
@@ -336,7 +337,7 @@ function updateDebugPanel(info) {
   dbgQuality.textContent = `${info.grounded} / ${info.visScore}%`;
 }
 
-// Full Body Calibration & Proximity Verification (Section 3 & 14)
+// Full Body Calibration & Room-Friendly Proximity Verification (Section 3 & 14)
 function checkFullBodyVisibility(landmarks) {
   if (!landmarks) return { isFull: false, reason: "No body detected. Please step into view." };
 
@@ -344,57 +345,31 @@ function checkFullBodyVisibility(landmarks) {
   const leftShoulder = landmarks[11], rightShoulder = landmarks[12];
   const leftHip = landmarks[23], rightHip = landmarks[24];
   const leftKnee = landmarks[25], rightKnee = landmarks[26];
-  const leftAnkle = landmarks[27], rightAnkle = landmarks[28];
-  const leftFoot = landmarks[31], rightFoot = landmarks[32];
 
   const shouldersOk = visible(leftShoulder) && visible(rightShoulder);
   const hipsOk = visible(leftHip) && visible(rightHip);
-  const kneesOk = visible(leftKnee) && visible(rightKnee);
-  const anklesOk = visible(leftAnkle) && visible(rightAnkle);
-  const feetOk = anklesOk || (leftFoot && visible(leftFoot)) || (rightFoot && visible(rightFoot));
 
-  // 1. Proximity Check (Section 14): When Player is Too Close to Camera
-  const shoulderAvgY = (leftShoulder.y + rightShoulder.y) / 2;
-  const footAvgY = (leftFoot && visible(leftFoot)) ? leftFoot.y : (leftAnkle ? leftAnkle.y : 1.0);
-  const bodyH = dist(avg(leftShoulder, rightShoulder), avg(leftAnkle || leftHip, rightAnkle || rightHip));
+  if (!shouldersOk || !hipsOk) {
+    return { isFull: false, reason: "Step into view so your upper body & hips are visible." };
+  }
 
-  if (bodyH > 0.84 || (shoulderAvgY < 0.06 && (!kneesOk || !feetOk))) {
+  // 1. Proximity Check (Section 14): Only ask to step back if standing right on top of the lens
+  const torsoH = dist(avg(leftShoulder, rightShoulder), avg(leftHip, rightHip));
+  if (torsoH > 0.65) {
     return { isFull: false, isTooClose: true, reason: "STEP BACK — Standing too close to camera." };
   }
 
-  if (!shouldersOk || !hipsOk) {
-    return { isFull: false, reason: "Torso not fully visible — step back from the camera." };
-  }
-
-  const headY = nose ? nose.y : (shoulderAvgY - 0.15);
-  if (headY < 0.01) {
-    return { isFull: false, reason: "Head is cut off at top — step back or tilt camera up." };
-  }
-
-  // During active gameplay, if hips and shoulders are clearly visible and player is squatting, protect from false pauses
-  const isSquatActive = (currentState === FSMState.SQUATTING || currentState === FSMState.SQUAT_CANDIDATE);
-  if (gameActive && shouldersOk && hipsOk && isSquatActive) {
-    return { isFull: true, reason: "✓ Full body detected!" };
-  }
-
-  if (!kneesOk) {
-    return { isFull: false, reason: "Knees and lower body not visible — step back." };
-  }
-
-  if (!feetOk) {
-    return { isFull: false, reason: "Feet not visible — step back or tilt camera down." };
-  }
-
-  if (footAvgY > 0.98) {
-    return { isFull: false, reason: "Feet cut off at bottom — step back slightly." };
+  const headY = nose ? nose.y : ((leftShoulder.y + rightShoulder.y) / 2 - 0.15);
+  if (headY < 0.005) {
+    return { isFull: false, reason: "Head cut off at top — step back slightly or tilt camera up." };
   }
 
   const screenX = 1 - (leftHip.x + rightHip.x) / 2;
-  if (screenX < 0.08 || screenX > 0.92) {
-    return { isFull: false, reason: "Step towards the center of the screen." };
+  if (screenX < 0.05 || screenX > 0.95) {
+    return { isFull: false, reason: "Step towards the center of the frame." };
   }
 
-  return { isFull: true, reason: "✓ Full body detected!" };
+  return { isFull: true, reason: "✓ Body locked & ready!" };
 }
 
 function calibrateFrame(landmarks, result) {
